@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NiFi Monitor - Dashboard de Erros</title>
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+        crossorigin="anonymous" />
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
+  <style>
+    :root {
+      --bg: #0f1117;
+      --card-bg: #1a1d27;
+      --border: #2a2d3e;
+      --text: #e0e4f0;
+      --muted: #7b8099;
+      --error: #e74c6a;
+      --warning: #f0a030;
+      --info: #3b9edd;
+      --ok: #2ecc71;
+    }
+    body { background: var(--bg); color: var(--text); font-family: "Segoe UI", sans-serif; }
+    .navbar { background: #111320 !important; border-bottom: 1px solid var(--border); }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+    .card-header { background: transparent; border-bottom: 1px solid var(--border); }
+
+    /* Status indicator */
+    .status-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      display: inline-block; margin-right: 6px;
+    }
+    .status-dot.online  { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+    .status-dot.offline { background: var(--error); box-shadow: 0 0 6px var(--error); }
+    .status-dot.unknown { background: var(--muted); }
+
+    /* Metric cards */
+    .metric-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 18px 22px;
+      text-align: center;
+    }
+    .metric-card .value { font-size: 2rem; font-weight: 700; line-height: 1; }
+    .metric-card .label { font-size: 0.78rem; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: .05em; }
+    .metric-card.error  { border-color: var(--error); }
+    .metric-card.warning{ border-color: var(--warning); }
+    .metric-card.ok     { border-color: var(--ok); }
+    .metric-card.info   { border-color: var(--info); }
+
+    /* Bulletin table */
+    .bulletin-table { font-size: 0.85rem; }
+    .bulletin-table th { color: var(--muted); font-weight: 600; border-color: var(--border) !important; }
+    .bulletin-table td { border-color: var(--border) !important; vertical-align: middle; }
+    .bulletin-table tbody tr:hover { background: rgba(255,255,255,.03); }
+
+    .badge-ERROR    { background: var(--error)   !important; }
+    .badge-WARNING  { background: var(--warning) !important; }
+    .badge-INFO     { background: var(--info)    !important; }
+    .badge-CRITICAL { background: #c0392b        !important; }
+
+    /* Filter buttons */
+    .filter-btn { border-radius: 20px !important; font-size: .78rem; padding: 3px 12px; }
+    .filter-btn.active { box-shadow: 0 0 0 2px rgba(255,255,255,.2); }
+
+    /* Message cell */
+    .msg-cell { max-width: 440px; word-break: break-word; }
+    .msg-cell code { background: rgba(255,255,255,.07); padding: 1px 4px; border-radius: 3px; font-size:.82rem; }
+
+    /* Pulse animation for new bulletins */
+    @keyframes rowPulse {
+      0%   { background: rgba(231,76,106,.18); }
+      100% { background: transparent; }
+    }
+    .new-row { animation: rowPulse 2s ease-out forwards; }
+
+    /* Connection badge */
+    #conn-badge { font-size: .72rem; padding: 3px 8px; border-radius: 10px; }
+
+    /* Scrollable table wrapper */
+    .table-scroll { max-height: 520px; overflow-y: auto; }
+    .table-scroll::-webkit-scrollbar { width: 6px; }
+    .table-scroll::-webkit-scrollbar-track { background: transparent; }
+    .table-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  </style>
+</head>
+<body>
+
+<!-- Navbar -->
+<nav class="navbar navbar-dark px-4 py-2">
+  <span class="navbar-brand fw-bold fs-5">
+    <i class="bi bi-activity me-2 text-info"></i>NiFi Error Monitor
+  </span>
+  <div class="d-flex align-items-center gap-3">
+    <small class="text-muted">
+      <i class="bi bi-link-45deg"></i>
+      <a href="{{ nifi_url }}/nifi" target="_blank" class="text-info text-decoration-none">
+        {{ nifi_url }}
+      </a>
+    </small>
+    <span id="conn-badge" class="badge bg-secondary">Conectando...</span>
+  </div>
+</nav>
+
+<div class="container-fluid px-4 py-3">
+
+  <!-- Status Bar -->
+  <div class="d-flex align-items-center gap-3 mb-3">
+    <span>
+      <span class="status-dot unknown" id="status-dot"></span>
+      <span id="status-text" class="fw-semibold">Verificando...</span>
+    </span>
+    <small class="text-muted">
+      <i class="bi bi-clock me-1"></i>
+      Última atualização: <span id="last-update">{{ last_update or '—' }}</span>
+    </small>
+    <small class="text-muted">
+      <i class="bi bi-arrow-repeat me-1"></i>
+      Poll: {{ poll_interval }}s
+    </small>
+    <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="location.reload()">
+      <i class="bi bi-arrow-clockwise"></i> Recarregar
+    </button>
+  </div>
+
+  <!-- Metric Cards Row -->
+  <div class="row g-3 mb-3">
+    <div class="col-6 col-md-3 col-xl-2">
+      <div class="metric-card error">
+        <div class="value text-danger" id="m-errors">{{ error_count }}</div>
+        <div class="label"><i class="bi bi-exclamation-octagon me-1"></i>Erros</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3 col-xl-2">
+      <div class="metric-card warning">
+        <div class="value text-warning" id="m-warnings">{{ warning_count }}</div>
+        <div class="label"><i class="bi bi-exclamation-triangle me-1"></i>Avisos</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3 col-xl-2">
+      <div class="metric-card ok">
+        <div class="value text-success" id="m-running">{{ flow_status.get('running', '—') }}</div>
+        <div class="label"><i class="bi bi-play-circle me-1"></i>Rodando</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3 col-xl-2">
+      <div class="metric-card info">
+        <div class="value text-info" id="m-queued">{{ flow_status.get('flowFilesQueued', '—') }}</div>
+        <div class="label"><i class="bi bi-stack me-1"></i>Em Fila</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3 col-xl-2">
+      <div class="metric-card">
+        <div class="value" id="m-stopped">{{ flow_status.get('stopped', '—') }}</div>
+        <div class="label"><i class="bi bi-stop-circle me-1"></i>Parados</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3 col-xl-2">
+      <div class="metric-card">
+        <div class="value text-danger" id="m-invalid">{{ flow_status.get('invalid', '—') }}</div>
+        <div class="label"><i class="bi bi-x-circle me-1"></i>Inválidos</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Grid: Bulletins + System Info -->
+  <div class="row g-3">
+
+    <!-- Bulletins Panel -->
+    <div class="col-lg-8">
+      <div class="card h-100">
+        <div class="card-header d-flex align-items-center gap-2 flex-wrap py-2">
+          <span class="fw-semibold">
+            <i class="bi bi-journal-text me-1 text-info"></i>Bulletin Board
+          </span>
+          <span class="badge bg-secondary ms-1" id="total-count">
+            {{ bulletins | length }}
+          </span>
+          <div class="ms-auto d-flex gap-1 flex-wrap">
+            <button class="btn btn-sm btn-outline-danger filter-btn active"   data-level="ERROR"   onclick="filterLevel(this)">ERROR</button>
+            <button class="btn btn-sm btn-outline-warning filter-btn"         data-level="WARNING" onclick="filterLevel(this)">WARNING</button>
+            <button class="btn btn-sm btn-outline-info filter-btn"            data-level="INFO"    onclick="filterLevel(this)">INFO</button>
+            <button class="btn btn-sm btn-outline-secondary filter-btn active" data-level="ALL"   onclick="filterLevel(this)">TODOS</button>
+          </div>
+        </div>
+        <div class="card-body p-0">
+          <div class="table-scroll">
+            <table class="table table-dark bulletin-table mb-0">
+              <thead class="sticky-top" style="top:0; background: var(--card-bg);">
+                <tr>
+                  <th style="width:130px">Hora</th>
+                  <th style="width:80px">Nível</th>
+                  <th>Processador / Grupo</th>
+                  <th>Mensagem</th>
+                  <th style="width:80px">Nó</th>
+                </tr>
+              </thead>
+              <tbody id="bulletin-body">
+                {% for b in bulletins %}
+                <tr data-level="{{ b.level | upper }}">
+                  <td class="text-muted">{{ b.parsed_time or b.timestamp }}</td>
+                  <td>
+                    <span class="badge badge-{{ b.level | upper }}">{{ b.level | upper }}</span>
+                  </td>
+                  <td>
+                    <div class="fw-semibold">{{ b.sourceName or '—' }}</div>
+                    <small class="text-muted">{{ b.groupName or '' }}</small>
+                  </td>
+                  <td class="msg-cell">{{ b.message }}</td>
+                  <td class="text-muted small">{{ b.nodeAddress or '—' }}</td>
+                </tr>
+                {% else %}
+                <tr id="empty-row">
+                  <td colspan="5" class="text-center text-muted py-5">
+                    <i class="bi bi-check-circle fs-3 d-block mb-2 text-success"></i>
+                    Nenhum bulletin encontrado. NiFi está saudável!
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Panel: System + Cluster -->
+    <div class="col-lg-4 d-flex flex-column gap-3">
+
+      <!-- Cluster -->
+      <div class="card">
+        <div class="card-header py-2 fw-semibold">
+          <i class="bi bi-diagram-3 me-1 text-info"></i>Cluster
+        </div>
+        <div class="card-body py-2">
+          {% if cluster %}
+          <ul class="list-unstyled mb-0 small">
+            <li class="d-flex justify-content-between py-1 border-bottom border-secondary">
+              <span class="text-muted">Conectado ao Cluster</span>
+              <span>{{ 'Sim' if cluster.connectedToCluster else 'Não' }}</span>
+            </li>
+            <li class="d-flex justify-content-between py-1">
+              <span class="text-muted">Nós Conectados</span>
+              <span>{{ cluster.connectedNodes }} / {{ cluster.totalNodes }}</span>
+            </li>
+          </ul>
+          {% else %}
+          <small class="text-muted">Dados indisponíveis</small>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- System Diagnostics -->
+      <div class="card flex-grow-1">
+        <div class="card-header py-2 fw-semibold">
+          <i class="bi bi-cpu me-1 text-info"></i>Sistema
+        </div>
+        <div class="card-body py-2">
+          {% if system %}
+          <ul class="list-unstyled mb-0 small">
+            <li class="d-flex justify-content-between py-1 border-bottom border-secondary">
+              <span class="text-muted">Heap Usado</span>
+              <span>{{ system.heapUsed }}</span>
+            </li>
+            <li class="d-flex justify-content-between py-1 border-bottom border-secondary">
+              <span class="text-muted">Heap Máx</span>
+              <span>{{ system.heapMax }}</span>
+            </li>
+            <li class="d-flex justify-content-between py-1 border-bottom border-secondary">
+              <span class="text-muted">Heap Utilização</span>
+              <span class="{{ 'text-danger' if system.heapUtilization and system.heapUtilization.rstrip('%')|float > 85 else '' }}">
+                {{ system.heapUtilization }}
+              </span>
+            </li>
+            <li class="d-flex justify-content-between py-1 border-bottom border-secondary">
+              <span class="text-muted">Non-Heap Usado</span>
+              <span>{{ system.nonHeapUsed }}</span>
+            </li>
+            <li class="d-flex justify-content-between py-1 border-bottom border-secondary">
+              <span class="text-muted">Processadores</span>
+              <span>{{ system.availableProcessors }}</span>
+            </li>
+            <li class="d-flex justify-content-between py-1">
+              <span class="text-muted">Carga CPU (avg)</span>
+              <span>{{ system.processorLoadAverage }}</span>
+            </li>
+          </ul>
+          {% if system.contentRepoStorageUsage %}
+          <hr class="border-secondary my-2" />
+          <div class="text-muted small mb-1">Armazenamento Content Repo</div>
+          {% for repo in system.contentRepoStorageUsage %}
+          <div class="d-flex justify-content-between small py-1">
+            <span class="text-muted text-truncate" style="max-width:140px">{{ repo.identifier }}</span>
+            <span>{{ repo.usage }} ({{ repo.free }} livre)</span>
+          </div>
+          {% endfor %}
+          {% endif %}
+          {% else %}
+          <small class="text-muted">Dados indisponíveis</small>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- Flow Status Detail -->
+      <div class="card">
+        <div class="card-header py-2 fw-semibold">
+          <i class="bi bi-bar-chart me-1 text-info"></i>Flow Status
+        </div>
+        <div class="card-body py-2">
+          {% if flow_status %}
+          <ul class="list-unstyled mb-0 small">
+            <li class="d-flex justify-content-between py-1 border-bottom border-secondary">
+              <span class="text-muted">Threads Ativos</span>
+              <span>{{ flow_status.activeThreadCount }}</span>
+            </li>
+            <li class="d-flex justify-content-between py-1 border-bottom border-secondary">
+              <span class="text-muted">Threads Terminados</span>
+              <span>{{ flow_status.terminatedThreadCount }}</span>
+            </li>
+            <li class="d-flex justify-content-between py-1 border-bottom border-secondary">
+              <span class="text-muted">Remote Ports Ativos</span>
+              <span>{{ flow_status.activeRemotePorts }}</span>
+            </li>
+            <li class="d-flex justify-content-between py-1">
+              <span class="text-muted">Fila Total</span>
+              <span>{{ flow_status.queued }}</span>
+            </li>
+          </ul>
+          {% else %}
+          <small class="text-muted">Dados indisponíveis</small>
+          {% endif %}
+        </div>
+      </div>
+
+    </div><!-- /right panel -->
+  </div><!-- /row -->
+</div><!-- /container -->
+
+<script>
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+let activeFilter = 'ALL';
+let bulletinRows = [];  // cache de linhas renderizadas
+
+// ---------------------------------------------------------------------------
+// SSE Connection
+// ---------------------------------------------------------------------------
+function connectSSE() {
+  const badge  = document.getElementById('conn-badge');
+  const es = new EventSource('/stream');
+
+  es.onopen = () => {
+    badge.textContent = 'Conectado';
+    badge.className = 'badge bg-success';
+    console.log('[SSE] Conectado');
+  };
+
+  es.onerror = () => {
+    badge.textContent = 'Reconectando...';
+    badge.className = 'badge bg-warning text-dark';
+    console.warn('[SSE] Erro — reconectando em 5s');
+    es.close();
+    setTimeout(connectSSE, 5000);
+  };
+
+  es.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      handleEvent(msg);
+    } catch(err) {
+      console.error('[SSE] parse error', err);
+    }
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Event handler
+// ---------------------------------------------------------------------------
+function handleEvent(msg) {
+  if (msg.last_update) {
+    document.getElementById('last-update').textContent = msg.last_update;
+  }
+
+  // Update counters
+  if (msg.error_count !== undefined) {
+    document.getElementById('m-errors').textContent   = msg.error_count;
+    document.getElementById('m-warnings').textContent = msg.warning_count;
+  }
+
+  // Status dot
+  if (msg.nifi_online !== undefined) {
+    const dot  = document.getElementById('status-dot');
+    const text = document.getElementById('status-text');
+    dot.className  = 'status-dot ' + (msg.nifi_online ? 'online' : 'offline');
+    text.textContent = msg.nifi_online ? 'NiFi Online' : 'NiFi Offline';
+  }
+
+  // Inject new bulletins
+  if (msg.bulletins && msg.bulletins.length > 0) {
+    const tbody = document.getElementById('bulletin-body');
+
+    // Remove empty-state row
+    const empty = document.getElementById('empty-row');
+    if (empty) empty.remove();
+
+    msg.bulletins.forEach(b => {
+      const tr = buildRow(b, true);
+      tbody.insertBefore(tr, tbody.firstChild);
+    });
+
+    applyFilter(activeFilter);
+    updateTotalCount();
+    // Flash title
+    flashTitle(msg.bulletins.length);
+  }
+
+  if (msg.type === 'init' && msg.bulletins && msg.bulletins.length > 0) {
+    rebuildTable(msg.bulletins);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Table helpers
+// ---------------------------------------------------------------------------
+function buildRow(b, isNew = false) {
+  const tr = document.createElement('tr');
+  tr.dataset.level = (b.level || 'INFO').toUpperCase();
+  if (isNew) tr.classList.add('new-row');
+
+  const time = b.parsed_time || b.timestamp || '—';
+  const level = (b.level || 'INFO').toUpperCase();
+  const src   = b.sourceName || '—';
+  const grp   = b.groupName  || '';
+  const msg   = escHtml(b.message || '');
+  const node  = b.nodeAddress || '—';
+
+  tr.innerHTML = `
+    <td class="text-muted">${escHtml(time)}</td>
+    <td><span class="badge badge-${level}">${level}</span></td>
+    <td><div class="fw-semibold">${escHtml(src)}</div><small class="text-muted">${escHtml(grp)}</small></td>
+    <td class="msg-cell">${msg}</td>
+    <td class="text-muted small">${escHtml(node)}</td>
+  `;
+  return tr;
+}
+
+function rebuildTable(bulletins) {
+  const tbody = document.getElementById('bulletin-body');
+  tbody.innerHTML = '';
+  bulletins.forEach(b => tbody.appendChild(buildRow(b, false)));
+  applyFilter(activeFilter);
+  updateTotalCount();
+}
+
+function updateTotalCount() {
+  const rows = document.querySelectorAll('#bulletin-body tr[data-level]');
+  document.getElementById('total-count').textContent = rows.length;
+}
+
+// ---------------------------------------------------------------------------
+// Filter
+// ---------------------------------------------------------------------------
+function filterLevel(btn) {
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  activeFilter = btn.dataset.level;
+  applyFilter(activeFilter);
+}
+
+function applyFilter(level) {
+  const rows = document.querySelectorAll('#bulletin-body tr[data-level]');
+  rows.forEach(tr => {
+    const show = (level === 'ALL') || (tr.dataset.level === level);
+    tr.style.display = show ? '' : 'none';
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Utils
+// ---------------------------------------------------------------------------
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+
+let flashCount = 0;
+const origTitle = document.title;
+function flashTitle(n) {
+  if (flashCount > 0) return;
+  flashCount = 6;
+  const interval = setInterval(() => {
+    document.title = flashCount % 2 === 0
+      ? `(${n} novo${n>1?'s':''}) ${origTitle}`
+      : origTitle;
+    if (--flashCount <= 0) { clearInterval(interval); document.title = origTitle; }
+  }, 800);
+}
+
+// ---------------------------------------------------------------------------
+// Boot
+// ---------------------------------------------------------------------------
+document.addEventListener('DOMContentLoaded', () => {
+  connectSSE();
+  // Set initial filter to ALL
+  document.querySelector('[data-level="ALL"]').click();
+});
+</script>
+</body>
+</html>

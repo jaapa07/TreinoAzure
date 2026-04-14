@@ -1,0 +1,16 @@
+version: "3.9"
+
+services:
+  nifi-monitor:
+    build: .
+    container_name: nifi-monitor
+    ports:
+      - "5000:5000"
+    environment:
+      - NIFI_BASE_URL=https://nifi-tierc.lincros.com/nifi
+      - NIFI_USERNAME=${NIFI_USERNAME:-}
+      - NIFI_PASSWORD=${NIFI_PASSWORD:-}
+      - NIFI_VERIFY_SSL=false
+      - POLL_INTERVAL=30
+      - MAX_HISTORY=500
+    restart: unless-stopped
